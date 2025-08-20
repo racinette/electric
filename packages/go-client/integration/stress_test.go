@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -57,22 +56,24 @@ func testHundredsOfUpdates(t *testing.T, config *TestConfig, dbClient *TestDBCli
 	rng := rand.New(rand.NewSource(seed))
 
 	// Create test table
-	table, err := NewTestIssuesTable(dbClient, config, "h100")
+	table, err := NewTestMultitypeTable(dbClient, config, "h100")
 	require.NoError(t, err)
 	defer table.Cleanup()
 
 	// Insert initial batch of data
 	const initialCount = 10
-	var initialIDs []string
+	var initialIDs []int
+	var initialRows []MultitypeRow
 	for i := 0; i < initialCount; i++ {
-		id := uuid.New().String()
-		initialIDs = append(initialIDs, id)
-		_, err := table.InsertIssues(IssueRow{
-			ID:    id,
-			Title: fmt.Sprintf("Initial Issue %d", i),
+		pk := i + 1
+		initialIDs = append(initialIDs, pk)
+		initialRows = append(initialRows, MultitypeRow{
+			I2:  pk,
+			Txt: fmt.Sprintf("Initial Issue %d", i),
 		})
-		require.NoError(t, err)
 	}
+	err = table.InsertTestRows(initialRows)
+	require.NoError(t, err)
 
 	// Wait for initial data to be processed
 	_, err = WaitForTransaction(config, table.TableURL(), initialCount, nil)
@@ -126,7 +127,7 @@ func testHundredsOfUpdates(t *testing.T, config *TestConfig, dbClient *TestDBCli
 		targetID := initialIDs[i%len(initialIDs)]
 		newTitle := fmt.Sprintf("Updated Issue %d (iteration %d)", i%len(initialIDs), i)
 
-		err := table.UpdateIssue(targetID, IssueRow{Title: newTitle})
+		err := table.UpdateTestRow(targetID, MultitypeRow{Txt: newTitle})
 		require.NoError(t, err)
 
 		// Add small random delays to make it more realistic
@@ -159,7 +160,7 @@ func testHundredsOfUpdates(t *testing.T, config *TestConfig, dbClient *TestDBCli
 
 	// Validate that each row has the latest update
 	for _, row := range finalRowsSnapshot {
-		title := row["title"].(string)
+		title := row["txt"].(string)
 		assert.Contains(t, title, "Updated Issue", "Each row should have been updated")
 	}
 
@@ -173,39 +174,41 @@ func testRandomPausesWithValidation(t *testing.T, config *TestConfig, dbClient *
 	rng := rand.New(rand.NewSource(seed))
 
 	// Create test table with WHERE clause for more interesting filtering
-	table, err := NewTestIssuesTable(dbClient, config, "rnd")
+	table, err := NewTestMultitypeTable(dbClient, config, "rnd")
 	require.NoError(t, err)
 	defer table.Cleanup()
 
 	// Insert initial data with different priorities
 	const initialCount = 15
-	var highPriorityIDs []string
-	var lowPriorityIDs []string
+	var highPriorityIDs []int
+	var lowPriorityIDs []int
 
+	var rowsToInsert []MultitypeRow
 	for i := 0; i < initialCount; i++ {
-		id := uuid.New().String()
-		priority := 10 // default priority
+		pk := i + 1
+		i4 := 10 // default priority
 		if i%3 == 0 {
-			priority = 1 // high priority
-			highPriorityIDs = append(highPriorityIDs, id)
+			i4 = 1 // high priority
+			highPriorityIDs = append(highPriorityIDs, pk)
 		} else {
-			lowPriorityIDs = append(lowPriorityIDs, id)
+			lowPriorityIDs = append(lowPriorityIDs, pk)
 		}
 
-		_, err := table.InsertIssues(IssueRow{
-			ID:       id,
-			Title:    fmt.Sprintf("Issue %d", i),
-			Priority: &priority,
+		rowsToInsert = append(rowsToInsert, MultitypeRow{
+			I2:  pk,
+			Txt: fmt.Sprintf("Issue %d", i),
+			I4:  &i4,
 		})
-		require.NoError(t, err)
 	}
+	err = table.InsertTestRows(rowsToInsert)
+	require.NoError(t, err)
 
 	// Wait for initial data to be processed by Electric using proper synchronization
 	_, err = WaitForTransaction(config, table.TableURL(), initialCount, nil)
 	require.NoError(t, err)
 
 	// Verify data exists in database
-	rows, err := dbClient.Query(fmt.Sprintf("SELECT COUNT(*) FROM %s", table.TableName()))
+	rows, err := dbClient.Query(fmt.Sprintf("SELECT COUNT(*) FROM %s", table.TableURL()))
 	require.NoError(t, err)
 	var count int
 	if rows.Next() {
@@ -269,7 +272,7 @@ func testRandomPausesWithValidation(t *testing.T, config *TestConfig, dbClient *
 			if len(highPriorityIDs) > 0 {
 				targetID := highPriorityIDs[rng.Intn(len(highPriorityIDs))]
 				newTitle := fmt.Sprintf("Updated High Priority %d", i)
-				err := table.UpdateIssue(targetID, IssueRow{Title: newTitle})
+				err := table.UpdateTestRow(targetID, MultitypeRow{Txt: newTitle})
 				require.NoError(t, err)
 			}
 		case 2: // 25% chance: Convert low priority to high priority
@@ -277,9 +280,9 @@ func testRandomPausesWithValidation(t *testing.T, config *TestConfig, dbClient *
 				targetIdx := rng.Intn(len(lowPriorityIDs))
 				targetID := lowPriorityIDs[targetIdx]
 				highPriority := 1
-				err := table.UpdateIssue(targetID, IssueRow{
-					Title:    fmt.Sprintf("Promoted to High Priority %d", i),
-					Priority: &highPriority,
+				err := table.UpdateTestRow(targetID, MultitypeRow{
+					Txt: fmt.Sprintf("Promoted to High Priority %d", i),
+					I4:  &highPriority,
 				})
 				require.NoError(t, err)
 
@@ -288,15 +291,15 @@ func testRandomPausesWithValidation(t *testing.T, config *TestConfig, dbClient *
 				lowPriorityIDs = append(lowPriorityIDs[:targetIdx], lowPriorityIDs[targetIdx+1:]...)
 			}
 		case 3: // 25% chance: Insert new high priority item
-			id := uuid.New().String()
+			pk := initialCount + i + 1
 			priority := 1
-			_, err := table.InsertIssues(IssueRow{
-				ID:       id,
-				Title:    fmt.Sprintf("New High Priority %d", i),
-				Priority: &priority,
-			})
+			err := table.InsertTestRows([]MultitypeRow{{
+				I2:  pk,
+				Txt: fmt.Sprintf("New High Priority %d", i),
+				I4:  &priority,
+			}})
 			require.NoError(t, err)
-			highPriorityIDs = append(highPriorityIDs, id)
+			highPriorityIDs = append(highPriorityIDs, pk)
 		}
 
 		// Do not validate during execution - this violates eventual consistency
@@ -331,7 +334,7 @@ func testConcurrentUpdatesStress(t *testing.T, config *TestConfig, dbClient *Tes
 	var operationsComplete sync.WaitGroup
 
 	// Create test table
-	table, err := NewTestIssuesTable(dbClient, config, "conc")
+	table, err := NewTestMultitypeTable(dbClient, config, "conc")
 	require.NoError(t, err)
 
 	// Set up cleanup that waits for operations to complete even on test failure
@@ -348,16 +351,18 @@ func testConcurrentUpdatesStress(t *testing.T, config *TestConfig, dbClient *Tes
 
 	// Insert initial data
 	const initialCount = 20
-	var allIDs []string
+	var allIDs []int
+	var initialRows []MultitypeRow
 	for i := 0; i < initialCount; i++ {
-		id := uuid.New().String()
-		allIDs = append(allIDs, id)
-		_, err := table.InsertIssues(IssueRow{
-			ID:    id,
-			Title: fmt.Sprintf("Concurrent Issue %d", i),
+		pk := i + 1
+		allIDs = append(allIDs, pk)
+		initialRows = append(initialRows, MultitypeRow{
+			I2:  pk,
+			Txt: fmt.Sprintf("Concurrent Issue %d", i),
 		})
-		require.NoError(t, err)
 	}
+	err = table.InsertTestRows(initialRows)
+	require.NoError(t, err)
 
 	// Wait for initial data to be processed with proper synchronization
 	// Instead of sleep, wait for actual transaction confirmation
@@ -366,25 +371,25 @@ func testConcurrentUpdatesStress(t *testing.T, config *TestConfig, dbClient *Tes
 
 	// Additional synchronization: verify table exists and is fully accessible
 	// and that Electric has processed it properly
-	testID := uuid.New().String() // Use proper UUID format
-	_, err = table.InsertIssues(IssueRow{
-		ID:    testID,
-		Title: "Test sync record",
-	})
+	testPK := initialCount + 1 // Use proper UUID format
+	err = table.InsertTestRows([]MultitypeRow{{
+		I2:  testPK,
+		Txt: "Test sync record",
+	}})
 	require.NoError(t, err, "Should be able to insert test record")
 
 	// Wait for Electric to process this test record
 	_, err = WaitForTransaction(config, table.TableURL(), 1, nil)
 	require.NoError(t, err, "Electric should process test record")
 
-	err = table.DeleteIssue(testID)
+	err = table.DeleteTestRow(testPK)
 	require.NoError(t, err, "Should be able to delete test record")
 
 	// Wait for Electric to process the deletion
 	_, err = WaitForTransaction(config, table.TableURL(), 1, nil)
 	require.NoError(t, err, "Electric should process test deletion")
 
-	t.Logf("Table %s verified as fully accessible and Electric-compatible", table.TableName())
+	t.Logf("Table %s verified as fully accessible and Electric-compatible", table.TableURL())
 
 	// Create multiple shape streams to test concurrent consumption
 	const numStreams = 3
@@ -426,19 +431,19 @@ func testConcurrentUpdatesStress(t *testing.T, config *TestConfig, dbClient *Tes
 	const totalUpdates = numGoroutines * updatesPerGoroutine
 
 	// Final verification that table still exists before starting concurrent operations
-	testID2 := uuid.New().String()
-	_, err = table.InsertIssues(IssueRow{
-		ID:    testID2,
-		Title: "Pre-concurrent verification",
-	})
+	testPK2 := initialCount + 2
+	err = table.InsertTestRows([]MultitypeRow{{
+		I2:  testPK2,
+		Txt: "Pre-concurrent verification",
+	}})
 	if err != nil {
 		t.Fatalf("Table disappeared before concurrent operations: %v", err)
 	}
-	err = table.DeleteIssue(testID2)
+	err = table.DeleteTestRow(testPK2)
 	if err != nil {
 		t.Fatalf("Could not delete pre-concurrent verification record: %v", err)
 	}
-	t.Logf("Table %s verified still accessible right before concurrent operations", table.TableName())
+	t.Logf("Table %s verified still accessible right before concurrent operations", table.TableURL())
 
 	t.Logf("Starting %d concurrent goroutines, %d updates each (%d total)",
 		numGoroutines, updatesPerGoroutine, totalUpdates)
@@ -462,7 +467,7 @@ func testConcurrentUpdatesStress(t *testing.T, config *TestConfig, dbClient *Tes
 				targetID := allIDs[rng.Intn(len(allIDs))]
 				newTitle := fmt.Sprintf("Concurrent Update G%d-I%d", goroutineID, i)
 
-				err := table.UpdateIssue(targetID, IssueRow{Title: newTitle})
+				err := table.UpdateTestRow(targetID, MultitypeRow{Txt: newTitle})
 				if err != nil {
 					// For the first error in each goroutine, add more context
 					if i == 0 {
@@ -569,22 +574,22 @@ func testMixedOperationsStress(t *testing.T, config *TestConfig, dbClient *TestD
 	rng := rand.New(rand.NewSource(seed))
 
 	// Create test table
-	table, err := NewTestIssuesTable(dbClient, config, "mix")
+	table, err := NewTestMultitypeTable(dbClient, config, "mix")
 	require.NoError(t, err)
 	defer table.Cleanup()
 
 	// Give Electric time to discover the table and set up publication
 	// Insert and delete a test record to trigger publication setup
-	testID := uuid.New().String()
-	_, err = table.InsertIssues(IssueRow{
-		ID:    testID,
-		Title: "Test sync record for publication setup",
-	})
+	testPK := 1
+	err = table.InsertTestRows([]MultitypeRow{{
+		I2:  testPK,
+		Txt: "Test sync record for publication setup",
+	}})
 	require.NoError(t, err, "Should be able to insert test record")
 
-	err = table.DeleteIssue(testID)
+	err = table.DeleteTestRow(testPK)
 	require.NoError(t, err, "Should be able to delete test record")
-	t.Logf("Table %s verified and publication triggered", table.TableName())
+	t.Logf("Table %s verified and publication triggered", table.TableURL())
 
 	// Wait a moment for Electric to process the publication setup
 	time.Sleep(100 * time.Millisecond)
@@ -615,7 +620,7 @@ func testMixedOperationsStress(t *testing.T, config *TestConfig, dbClient *TestD
 	updateCount := 0
 	deleteCount := 0
 	shapeUpdateCount := 0
-	var allInsertedIDs []string
+	var allInsertedIDs []int
 	var mu sync.Mutex
 
 	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
@@ -634,15 +639,15 @@ func testMixedOperationsStress(t *testing.T, config *TestConfig, dbClient *TestD
 		operation := rng.Intn(100)
 		switch {
 		case operation < 40: // 40% inserts
-			id := uuid.New().String()
-			_, err := table.InsertIssues(IssueRow{
-				ID:    id,
-				Title: fmt.Sprintf("Mixed Op Insert %d", i),
-			})
+			pk := i + 1
+			err := table.InsertTestRows([]MultitypeRow{{
+				I2:  pk,
+				Txt: fmt.Sprintf("Mixed Op Insert %d", i),
+			}})
 			require.NoError(t, err)
 
 			mu.Lock()
-			allInsertedIDs = append(allInsertedIDs, id)
+			allInsertedIDs = append(allInsertedIDs, pk)
 			insertCount++
 			mu.Unlock()
 
@@ -652,8 +657,8 @@ func testMixedOperationsStress(t *testing.T, config *TestConfig, dbClient *TestD
 				targetID := allInsertedIDs[rng.Intn(len(allInsertedIDs))]
 				mu.Unlock()
 
-				err := table.UpdateIssue(targetID, IssueRow{
-					Title: fmt.Sprintf("Mixed Op Update %d", i),
+				err := table.UpdateTestRow(targetID, MultitypeRow{
+					Txt: fmt.Sprintf("Mixed Op Update %d", i),
 				})
 				require.NoError(t, err)
 
@@ -672,7 +677,7 @@ func testMixedOperationsStress(t *testing.T, config *TestConfig, dbClient *TestD
 				allInsertedIDs = append(allInsertedIDs[:targetIdx], allInsertedIDs[targetIdx+1:]...)
 				mu.Unlock()
 
-				err := table.DeleteIssue(targetID)
+				err := table.DeleteTestRow(targetID)
 				require.NoError(t, err)
 
 				mu.Lock()
@@ -731,14 +736,14 @@ func validateShapeConsistency(t *testing.T, reference, actual []goclient.Row, la
 	actualMap := make(map[string]goclient.Row)
 
 	for _, row := range reference {
-		if id, ok := row["id"].(string); ok {
-			refMap[id] = row
+		if id, ok := row["i2"].(float64); ok {
+			refMap[fmt.Sprintf("%f", id)] = row
 		}
 	}
 
 	for _, row := range actual {
-		if id, ok := row["id"].(string); ok {
-			actualMap[id] = row
+		if id, ok := row["i2"].(float64); ok {
+			actualMap[fmt.Sprintf("%f", id)] = row
 		}
 	}
 

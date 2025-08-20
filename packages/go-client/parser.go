@@ -205,6 +205,17 @@ func parseArray(value string, start int, parser NullableParseFunction) (interfac
 	return nil, i, fmt.Errorf("unterminated array")
 }
 
+// rawChangeMessage is used for initial JSON parsing to preserve raw JSON data
+// for value and old_value fields, preventing automatic float64 conversion
+type rawChangeMessage struct {
+	Key      string          `json:"key"`
+	Value    json.RawMessage `json:"value"`
+	OldValue json.RawMessage `json:"old_value,omitempty"`
+	Headers  struct {
+		Operation Operation `json:"operation"`
+	} `json:"headers"`
+}
+
 // ParseMessages parses a JSON array of messages using schema for value parsing.
 // This function provides schema-aware type conversion for message values while
 // maintaining the structured Message types that the codebase depends on.
@@ -238,26 +249,51 @@ func ParseMessages(data []byte, schema Schema, customParser ...Parser) ([]Messag
 			return nil, err
 		}
 		if _, ok := probe["key"]; ok {
-			var ch ChangeMessage
-			if err := json.Unmarshal(rm, &ch); err != nil {
+			// Parse into raw change message to preserve raw JSON for value fields
+			var rawCh rawChangeMessage
+			if err := json.Unmarshal(rm, &rawCh); err != nil {
 				return nil, err
 			}
 
-			// Apply schema-aware parsing to value and old_value if schema is provided
-			if schema != nil {
-				if ch.Value != nil {
-					parsedValue, err := parseRowWithSchema(ch.Value, schema, parser)
+			// Create final change message
+			ch := ChangeMessage{
+				Key:     rawCh.Key,
+				Headers: rawCh.Headers,
+			}
+
+			// Parse value field if present
+			if len(rawCh.Value) > 0 && string(rawCh.Value) != "null" {
+				if schema != nil {
+					parsedValue, err := parseRawRowWithSchema(rawCh.Value, schema, parser)
 					if err != nil {
 						return nil, err
 					}
 					ch.Value = parsedValue
+				} else {
+					// Fallback to regular JSON parsing when no schema
+					var value Row
+					if err := json.Unmarshal(rawCh.Value, &value); err != nil {
+						return nil, err
+					}
+					ch.Value = value
 				}
-				if ch.OldValue != nil {
-					parsedOldValue, err := parseRowWithSchema(ch.OldValue, schema, parser)
+			}
+
+			// Parse old_value field if present
+			if len(rawCh.OldValue) > 0 && string(rawCh.OldValue) != "null" {
+				if schema != nil {
+					parsedOldValue, err := parseRawRowWithSchema(rawCh.OldValue, schema, parser)
 					if err != nil {
 						return nil, err
 					}
 					ch.OldValue = parsedOldValue
+				} else {
+					// Fallback to regular JSON parsing when no schema
+					var oldValue Row
+					if err := json.Unmarshal(rawCh.OldValue, &oldValue); err != nil {
+						return nil, err
+					}
+					ch.OldValue = oldValue
 				}
 			}
 
@@ -271,6 +307,103 @@ func ParseMessages(data []byte, schema Schema, customParser ...Parser) ([]Messag
 		out = append(out, Message{Control: &ctrl})
 	}
 	return out, nil
+}
+
+// parseRawRowWithSchema parses a raw JSON row using schema information.
+// This function avoids the intermediate conversion to map[string]interface{} that
+// would convert all numbers to float64, preserving type information from the schema.
+func parseRawRowWithSchema(rawData json.RawMessage, schema Schema, parser Parser) (Row, error) {
+	// First, unmarshal into a map[string]json.RawMessage to get field-level raw data
+	var rawFields map[string]json.RawMessage
+	if err := json.Unmarshal(rawData, &rawFields); err != nil {
+		return nil, err
+	}
+
+	result := make(Row)
+	for key, rawValue := range rawFields {
+		columnInfo, exists := schema[key]
+		if !exists {
+			// No schema information, fallback to regular JSON parsing
+			var value interface{}
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				return nil, err
+			}
+			result[key] = value
+			continue
+		}
+
+		// Parse the raw value using schema information
+		parsedValue, err := parseRawValueWithSchema(key, rawValue, columnInfo, parser)
+		if err != nil {
+			return nil, err
+		}
+		result[key] = parsedValue
+	}
+
+	return result, nil
+}
+
+// parseRawValueWithSchema parses a single raw JSON value based on column information
+func parseRawValueWithSchema(columnName string, rawValue json.RawMessage, columnInfo ColumnInfo, parser Parser) (interface{}, error) {
+	// Handle null values
+	if string(rawValue) == "null" {
+		isNullable := true
+		if columnInfo.NotNull != nil {
+			isNullable = !*columnInfo.NotNull
+		}
+		if !isNullable {
+			return nil, ParserNullValueError{ColumnName: columnName}
+		}
+		return nil, nil
+	}
+
+	// Get the parser for this type
+	typeParser, exists := parser[columnInfo.Type]
+	if !exists {
+		// No parser for this type, fallback to regular JSON parsing
+		var value interface{}
+		if err := json.Unmarshal(rawValue, &value); err != nil {
+			return nil, err
+		}
+		return value, nil
+	}
+
+	// Convert raw JSON to string for parsing
+	var strValue string
+	if err := json.Unmarshal(rawValue, &strValue); err != nil {
+		// If it's not a string, fallback to regular JSON parsing
+		// This handles cases like JSON objects/arrays that should be parsed as-is
+		var value interface{}
+		if err := json.Unmarshal(rawValue, &value); err != nil {
+			return nil, err
+		}
+		return value, nil
+	}
+
+	// Create nullable parser
+	nullableParser := makeNullableParser(typeParser, columnInfo, columnName)
+
+	// Handle arrays
+	if columnInfo.Dims != nil && *columnInfo.Dims > 0 {
+		arrayParser := func(value *string, additionalInfo ...*ColumnInfo) (Value, error) {
+			if value == nil {
+				if columnInfo.NotNull != nil && *columnInfo.NotNull {
+					return nil, ParserNullValueError{ColumnName: columnName}
+				}
+				return nil, nil
+			}
+			return PgArrayParser(*value, nullableParser)
+		}
+
+		arrayNullableParser := makeNullableParser(func(value string, additionalInfo ...*ColumnInfo) (Value, error) {
+			return arrayParser(&value, additionalInfo...)
+		}, columnInfo, columnName)
+
+		return arrayNullableParser(&strValue, &columnInfo)
+	}
+
+	// Parse single value
+	return nullableParser(&strValue, &columnInfo)
 }
 
 // parseRowWithSchema parses a row using schema information, similar to MessageParser.parseRow

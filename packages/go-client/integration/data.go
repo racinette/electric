@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,7 @@ func NewTestMultitypeTable(client *TestDBClient, config *TestConfig, testID stri
 			i8 INT8,
 			f8 FLOAT8,
 			b  BOOLEAN,
+			num NUMERIC,
 			json JSON,
 			jsonb JSONB,
 			ints INT8[],
@@ -86,7 +88,7 @@ func (t *TestMultitypeTable) InsertTestData() error {
 	insertSQL := fmt.Sprintf(`
 		INSERT INTO %s (
 			txt, i2, i4, i8, f8, b, json, jsonb, ints, ints2, int4s, 
-			bools, moods, moods2, complexes, posints, jsons, txts, value, doubles
+			bools, moods, moods2, complexes, posints, jsons, txts, value, doubles, num
 		) VALUES (
 			'test',
 			1,
@@ -107,7 +109,8 @@ func (t *TestMultitypeTable) InsertTestData() error {
 			$8,
 			$9,
 			$10,
-			$11
+			$11,
+			$12
 		)
 	`, t.tableName)
 
@@ -123,6 +126,7 @@ func (t *TestMultitypeTable) InsertTestData() error {
 		"{foo,bar,baz}",                          // txts
 		"{\"a\": 5, \"b\": [{\"c\": \"foo\"}]}",  // value
 		"{\"Infinity\", \"-Infinity\", \"NaN\"}", // doubles
+		"123.456",                                // num
 	}
 
 	if _, err := t.client.Exec(insertSQL, args...); err != nil {
@@ -154,7 +158,8 @@ func (t *TestMultitypeTable) UpdateTestData() error {
 			jsons = $3,
 			txts = $4,
 			value = $5,
-			doubles = $6
+			doubles = $6,
+			num = $7
 		WHERE i2 = 1
 	`, t.tableName)
 
@@ -165,6 +170,7 @@ func (t *TestMultitypeTable) UpdateTestData() error {
 		"{new,values}",                           // txts
 		"{\"a\": 6}",                             // value
 		"{\"Infinity\", \"NaN\", \"-Infinity\"}", // doubles
+		"789.012",                                // num
 	}
 
 	if _, err := t.client.Exec(updateSQL, args...); err != nil {
@@ -172,6 +178,101 @@ func (t *TestMultitypeTable) UpdateTestData() error {
 	}
 
 	return nil
+}
+
+// MultitypeRow represents a row in the multitype table
+type MultitypeRow struct {
+	Txt       string
+	I2        int
+	I4        *int
+	I8        *int64
+	F8        *float64
+	B         *bool
+	Num       *string
+	JSON      *string
+	JSONB     *string
+	Ints      *string
+	Ints2     *string
+	Int4s     *string
+	Doubles   *string
+	Bools     *string
+	Moods     *string
+	Moods2    *string
+	Complexes *string
+	Posints   *string
+	Jsons     *string
+	Txts      *string
+	Value     *string
+}
+
+// InsertTestRows inserts multiple rows of test data
+func (t *TestMultitypeTable) InsertTestRows(rows []MultitypeRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	valueStrings := make([]string, 0, len(rows))
+	valueArgs := make([]interface{}, 0, len(rows)*21)
+
+	for i, row := range rows {
+		base := i * 21
+		placeholders := fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9, base+10,
+			base+11, base+12, base+13, base+14, base+15, base+16, base+17, base+18, base+19, base+20, base+21)
+		valueStrings = append(valueStrings, placeholders)
+
+		valueArgs = append(valueArgs, row.Txt, row.I2, row.I4, row.I8, row.F8, row.B, row.Num, row.JSON, row.JSONB,
+			row.Ints, row.Ints2, row.Int4s, row.Doubles, row.Bools, row.Moods, row.Moods2,
+			row.Complexes, row.Posints, row.Jsons, row.Txts, row.Value)
+	}
+
+	stmt := fmt.Sprintf(`INSERT INTO %s (
+		txt, i2, i4, i8, f8, b, num, json, jsonb, 
+		ints, ints2, int4s, doubles, bools, moods, moods2, 
+		complexes, posints, jsons, txts, value
+	) VALUES %s`, t.tableName, strings.Join(valueStrings, ","))
+
+	_, err := t.client.Exec(stmt, valueArgs...)
+	return err
+}
+
+// UpdateTestRow updates a single row
+func (t *TestMultitypeTable) UpdateTestRow(i2 int, updates MultitypeRow) error {
+	var setParts []string
+	var args []interface{}
+	argIdx := 1
+
+	addUpdate := func(field string, value interface{}) {
+		if value != nil {
+			setParts = append(setParts, fmt.Sprintf("%s = $%d", field, argIdx))
+			args = append(args, value)
+			argIdx++
+		}
+	}
+
+	addUpdate("txt", &updates.Txt)
+	addUpdate("i4", updates.I4)
+	addUpdate("i8", updates.I8)
+	addUpdate("f8", updates.F8)
+	addUpdate("b", updates.B)
+	addUpdate("num", updates.Num)
+
+	if len(setParts) == 0 {
+		return nil // No updates
+	}
+
+	args = append(args, i2)
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE i2 = $%d", t.tableName, strings.Join(setParts, ", "), argIdx)
+
+	_, err := t.client.Exec(query, args...)
+	return err
+}
+
+// DeleteTestRow deletes a single row
+func (t *TestMultitypeTable) DeleteTestRow(i2 int) error {
+	query := fmt.Sprintf("DELETE FROM %s WHERE i2 = $1", t.tableName)
+	_, err := t.client.Exec(query, i2)
+	return err
 }
 
 // Cleanup drops the test table and types
@@ -252,11 +353,15 @@ func testDataTypeParsing(t *testing.T, config *TestConfig, dbClient *TestDBClien
 
 	// Test basic types
 	assert.Equal(t, "test", row["txt"])
-	assert.Equal(t, float64(1), row["i2"]) // JSON numbers are float64
-	assert.Equal(t, float64(2147483647), row["i4"])
+	assert.Equal(t, 1, row["i2"])          // i2 should be parsed as int based on schema
+	assert.Equal(t, 2147483647, row["i4"]) // i4 should be parsed as int based on schema
 	// Note: Large int64 values may be returned as strings to preserve precision
 	assert.Equal(t, 4.5, row["f8"])
 	assert.Equal(t, true, row["b"])
+
+	// Test numeric type
+	// Note: NUMERIC values are often returned as strings to preserve precision
+	assert.Equal(t, "123.456", row["num"])
 
 	// Test JSON types
 	jsonObj, ok := row["json"].(map[string]interface{})
@@ -319,6 +424,9 @@ func testDataTypeParsing(t *testing.T, config *TestConfig, dbClient *TestDBClien
 	assert.Equal(t, float64(30), finalRow["i8"])
 	assert.Equal(t, 40.5, finalRow["f8"])
 	assert.Equal(t, false, finalRow["b"])
+
+	// Test updated numeric type
+	assert.Equal(t, "789.012", finalRow["num"])
 
 	// Test updated JSON
 	updatedJsonObj, ok := finalRow["json"].(map[string]interface{})
