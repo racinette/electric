@@ -249,10 +249,9 @@ func (v *ShapeValidator) valuesEqual(a, b interface{}) bool {
 	}
 
 	// Handle numeric comparisons
-	aFloat := v.toFloat64(a)
-	bFloat := v.toFloat64(b)
-	if aFloat != nil && bFloat != nil {
-		return *aFloat == *bFloat
+	cmpResult, err := CompareNumbers(a, b)
+	if err == nil {
+		return cmpResult == 0
 	}
 
 	// Handle boolean comparisons
@@ -264,28 +263,6 @@ func (v *ShapeValidator) valuesEqual(a, b interface{}) bool {
 
 	// Fallback to reflect.DeepEqual
 	return reflect.DeepEqual(a, b)
-}
-
-// toFloat64 attempts to convert a value to float64
-func (v *ShapeValidator) toFloat64(value interface{}) *float64 {
-	switch v := value.(type) {
-	case float64:
-		return &v
-	case float32:
-		f := float64(v)
-		return &f
-	case int:
-		f := float64(v)
-		return &f
-	case int32:
-		f := float64(v)
-		return &f
-	case int64:
-		f := float64(v)
-		return &f
-	default:
-		return nil
-	}
 }
 
 // QueryShapeEquivalent queries the database using the same criteria as a shape
