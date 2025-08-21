@@ -406,28 +406,6 @@ func parseRawValueWithSchema(columnName string, rawValue json.RawMessage, column
 	return nullableParser(&strValue, &columnInfo)
 }
 
-// parseRowWithSchema parses a row using schema information, similar to MessageParser.parseRow
-func parseRowWithSchema(row Row, schema Schema, parser Parser) (Row, error) {
-	result := make(Row)
-
-	for key, value := range row {
-		columnInfo, exists := schema[key]
-		if !exists {
-			// No schema information, keep value as-is
-			result[key] = value
-			continue
-		}
-
-		parsedValue, err := parseValueWithSchema(key, value, columnInfo, parser)
-		if err != nil {
-			return nil, err
-		}
-		result[key] = parsedValue
-	}
-
-	return result, nil
-}
-
 // parseValueWithSchema parses a single value based on column information, similar to MessageParser.parseValue
 func parseValueWithSchema(columnName string, value interface{}, columnInfo ColumnInfo, parser Parser) (interface{}, error) {
 	// Handle null values
