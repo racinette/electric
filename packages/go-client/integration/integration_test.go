@@ -185,7 +185,7 @@ func testLiveUpdates(t *testing.T, config *TestConfig, dbClient *TestDBClient, e
 	var finalRows []goclient.Row
 	updateDone := make(chan bool)
 
-	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 		updateCount++
 		finalRows = rows
 		if len(rows) > 0 {
@@ -268,7 +268,7 @@ func testWhereClause(t *testing.T, config *TestConfig, dbClient *TestDBClient, e
 	updateDone := make(chan bool)
 	var finalRows []goclient.Row
 
-	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 		finalRows = rows
 		if len(rows) == 0 { // Row should be removed
 			updateDone <- true
@@ -610,7 +610,7 @@ func testParallelClients(t *testing.T, config *TestConfig, dbClient *TestDBClien
 	updateDone := make(chan bool)
 	updatesSeen := 0
 
-	unsubscribe1 := shape1.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+	unsubscribe1 := shape1.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 		finalRows1 = rows
 		if len(rows) > 0 {
 			// Check if we have the updated row
@@ -627,7 +627,7 @@ func testParallelClients(t *testing.T, config *TestConfig, dbClient *TestDBClien
 	})
 	defer unsubscribe1()
 
-	unsubscribe2 := shape2.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+	unsubscribe2 := shape2.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 		finalRows2 = rows
 		if len(rows) > 0 {
 			// Check if we have the updated row

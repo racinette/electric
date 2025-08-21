@@ -395,7 +395,7 @@ func testDataTypeParsing(t *testing.T, config *TestConfig, dbClient *TestDBClien
 	var finalRow goclient.Row
 	updateDone := make(chan bool)
 
-	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 		updateCount++
 		if len(rows) > 0 {
 			finalRow = rows[0]
@@ -512,7 +512,7 @@ func TestColumnSelection(t *testing.T) {
 	updateDone := make(chan bool)
 	var finalRow goclient.Row
 
-	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 		if len(rows) > 0 {
 			finalRow = rows[0]
 			if finalRow["txt"] == "changed" {

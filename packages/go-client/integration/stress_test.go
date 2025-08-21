@@ -103,7 +103,7 @@ func testHundredsOfUpdates(t *testing.T, config *TestConfig, dbClient *TestDBCli
 	var finalRows []goclient.Row
 	var mu sync.Mutex
 
-	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 		mu.Lock()
 		updateCount++
 		finalRows = rows
@@ -249,7 +249,7 @@ func testRandomPausesWithValidation(t *testing.T, config *TestConfig, dbClient *
 	updateCount := 0
 	var mu sync.Mutex
 
-	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 		mu.Lock()
 		updateCount++
 		mu.Unlock()
@@ -413,7 +413,7 @@ func testConcurrentUpdatesStress(t *testing.T, config *TestConfig, dbClient *Tes
 		// Track updates for this shape
 		updateCounts = append(updateCounts, 0)
 		idx := i // capture for closure
-		shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+		shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 			atomic.AddInt64(&updateCounts[idx], 1)
 		})
 	}
@@ -623,7 +623,7 @@ func testMixedOperationsStress(t *testing.T, config *TestConfig, dbClient *TestD
 	var allInsertedIDs []int
 	var mu sync.Mutex
 
-	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row) {
+	unsubscribe := shape.Subscribe(func(value map[string]goclient.Row, rows []goclient.Row, diff goclient.Diff) {
 		mu.Lock()
 		shapeUpdateCount++
 		mu.Unlock()

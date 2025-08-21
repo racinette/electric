@@ -249,7 +249,7 @@ func TestShapeStreamSync(t *testing.T) {
 
 				// Set up subscription
 				notificationCh := make(chan map[string]Row, 1)
-				unsubscribe := shape.Subscribe(func(value map[string]Row, rows []Row) {
+				unsubscribe := shape.Subscribe(func(value map[string]Row, rows []Row, diff Diff) {
 					notificationCh <- value
 				})
 				defer unsubscribe()
@@ -281,7 +281,7 @@ func TestShapeStreamSync(t *testing.T) {
 
 				// Subscribe and immediately unsubscribe
 				callCount := 0
-				unsubscribe := shape.Subscribe(func(value map[string]Row, rows []Row) {
+				unsubscribe := shape.Subscribe(func(value map[string]Row, rows []Row, diff Diff) {
 					callCount++
 				})
 				unsubscribe()
@@ -454,7 +454,7 @@ func TestShapePauseResume(t *testing.T) {
 	shape := NewShape(stream)
 
 	// Subscribe to trigger sync
-	unsubscribe := shape.Subscribe(func(value map[string]Row, rows []Row) {
+	unsubscribe := shape.Subscribe(func(value map[string]Row, rows []Row, diff Diff) {
 		// Shape update received
 	})
 	defer unsubscribe()

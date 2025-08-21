@@ -64,3 +64,28 @@ type ColumnInfo struct {
 }
 
 type Schema map[string]ColumnInfo
+
+type Delete struct {
+	Key             string
+	Deleted         Row // this is the previous value of the row
+	ReplicaIdentity Row // in case of deletes this is replica identity (most of the time primary key, if not explicitly set)
+}
+
+type Update struct {
+	Key  string
+	Old  Row // old row value
+	New  Row // new row value
+	Diff Row // the diff between the old and new row value (updated fields)
+}
+
+type Insert struct {
+	Key string
+	New Row // the inserted row
+}
+
+// diff between the previous and the current state of the shape
+type Diff struct {
+	Updates map[string]Update
+	Deletes map[string]Delete
+	Inserts map[string]Insert
+}
